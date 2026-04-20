@@ -227,6 +227,15 @@ header p{font-size:11px;color:#888780;font-family:var(--mono);margin-top:2px}
     </div>
   </div>
 
+  <div id="corsWarning" style="display:none;background:#EAF3DE;border:1px solid rgba(59,109,17,.2);border-left:3px solid #639922;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;font-family:var(--mono);font-size:11px;line-height:2;color:#3B6D11">
+    <strong>Live-API blockiert — einmal lokalen Server starten:</strong><br>
+    Terminal im Ordner der HTML-Datei &ouml;ffnen und eingeben:<br><br>
+    <span style="background:#1a1a18;color:#EF9F27;padding:4px 12px;border-radius:5px;font-size:12px">python -m http.server 8080</span>
+    &nbsp;&nbsp;oder&nbsp;&nbsp;
+    <span style="background:#1a1a18;color:#EF9F27;padding:4px 12px;border-radius:5px;font-size:12px">npx serve .</span><br><br>
+    Dann Browser auf <strong>http://localhost:8080</strong> &ouml;ffnen. Danach funktioniert die Live-Suche. Die <strong>Direktlinks unten funktionieren immer</strong> ohne Server.
+  </div>
+
   <div class="err" id="errBox"></div>
   <div class="status" id="statusBar"><div class="dot"></div><span id="statusTxt"></span></div>
 
@@ -373,8 +382,8 @@ function renderLinks(links) {
 async function searchNexar(v) {
   const query = buildQuery(v);
   const gql = `
-    query SearchParts($q: String!, $filters: Map) {
-      supSearchMpn(q: $q, filters: $filters, limit: 12, currency: "EUR", country: "DE") {
+    query {
+      supSearchMpn(q: ${JSON.stringify(query)}, limit: 12, currency: "EUR", country: "DE") {
         results {
           part {
             mpn
@@ -385,7 +394,7 @@ async function searchNexar(v) {
             bestImage { url }
             bestDatasheet { url }
             sellers(authorizedOnly: false) {
-              company { name url }
+              company { name }
               offers {
                 clickUrl
                 inventoryLevel
@@ -399,23 +408,22 @@ async function searchNexar(v) {
     }
   `;
 
-  const filters = {};
-  if (v.vce) filters['vce_dc'] = [v.vce];
-  if (v.pkg) filters['case_package'] = [v.pkg];
-  if (v.type) filters['transistor_type'] = [v.type];
-
   const resp = await fetch('https://api.nexar.com/graphql', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${nexarToken}`,
     },
-    body: JSON.stringify({ query: gql, variables: { q: query, filters } })
+    body: JSON.stringify({ query: gql })
   });
 
-  if (!resp.ok) throw new Error(`Nexar API Fehler ${resp.status}`);
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Nexar ${resp.status}: ${txt.substring(0, 300)}`);
+  }
   const data = await resp.json();
-  if (data.errors) throw new Error(data.errors[0].message);
+  if (data.errors) throw new Error(data.errors.map(e => e.message).join(", "));
+  if (!data.data?.supSearchMpn) throw new Error("Unerwartete API-Antwort: " + JSON.stringify(data).substring(0,200));
   return data.data.supSearchMpn.results.map(r => r.part);
 }
 
@@ -520,7 +528,13 @@ async function doSearch() {
         renderNexarResults(parts, v);
       }
     } catch(e) {
-      setErr('Nexar Fehler: ' + e.message + ' — Direktlinks funktionieren trotzdem.');
+      const isCors = e.message === 'Failed to fetch' || e.name === 'TypeError';
+      if (isCors) {
+        document.getElementById('corsWarning').style.display = 'block';
+        setErr('');
+      } else {
+        setErr('Nexar Fehler: ' + e.message);
+      }
       switchTab('links');
     }
   } else {
